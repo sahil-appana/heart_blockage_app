@@ -8,9 +8,11 @@ import requests
 from streamlit_lottie import st_lottie
 from openai import OpenAI
 
-api_key = st.secrets["OPENAI_API_KEY"]
-client = OpenAI(api_key=api_key)
-
+# ========== SAFE OPENAI CLIENT SETUP ==========
+api_key = st.secrets.get("OPENAI_API_KEY", None)
+client = None
+if api_key:
+    client = OpenAI(api_key=api_key)
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -85,13 +87,6 @@ st.sidebar.divider()
 use_ai_agent = st.sidebar.toggle("🤖 Enable AI Detailed Reasoning", value=True)
 st.sidebar.info("📁 Upload only medical scan images (JPG, PNG, JPEG).")
 
-# ========== OPENAI CLIENT ==========
-if use_ai_agent:
-    try:
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-    except Exception:
-        st.warning("⚠️ OpenAI API key not found. Add it in Streamlit Secrets to use AI reasoning.")
-
 # ========== MAIN CONTENT ==========
 uploaded_file = st.file_uploader("📤 Upload a Heart Scan Image", type=["jpg", "jpeg", "png"])
 
@@ -99,7 +94,9 @@ if uploaded_file:
     col1, col2 = st.columns(2)
 
     with col1:
-        image = np.array(Image.open(uploaded_file))
+        # Convert to RGB to prevent grayscale index errors
+        image = Image.open(uploaded_file).convert("RGB")
+        image = np.array(image)
         st.image(image, caption="🩻 Uploaded Image", use_container_width=True)
 
     with col2:
@@ -112,9 +109,11 @@ if uploaded_file:
             processed = preprocess_image(image)
             prediction = model.predict(processed)
 
+            # Post-process mask
             mask = (prediction[0, :, :, 0] > 0.5).astype(np.uint8)
             mask_resized = cv2.resize(mask * 255, (image.shape[1], image.shape[0]))
 
+            # Overlay mask safely
             overlay = image.copy()
             overlay[:, :, 1] = np.maximum(overlay[:, :, 1], mask_resized)
             overlay = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
@@ -147,7 +146,7 @@ if uploaded_file:
         st.markdown("---")
         st.subheader("🤖 AI Assistant Analysis")
 
-        # Base message before AI reasoning
+        # Base message
         if result_text == "blockage":
             base_message = f"""
                 The scan indicates potential blockage with confidence {confidence:.1f}%.
@@ -159,16 +158,16 @@ if uploaded_file:
                 Vessel structures appear uniform and healthy.
                 """
 
-        # AI detailed reasoning
-        if use_ai_agent and "client" in locals():
+        # ========== AI REASONING (OpenAI Integration) ==========
+        if use_ai_agent and client:
             with st.spinner("🧠 Generating detailed AI interpretation..."):
                 prompt = f"""
                 You are a cardiology AI assistant analyzing a heart scan model output.
                 The model result is: {result_text}.
                 Confidence: {confidence:.1f}%.
-                Provide a short, professional explanation describing what this means medically, 
+                Provide a short, professional explanation describing what this means medically,
                 how reliable it might be, and what the next steps should be.
-                Make the tone human, informative, and medically neutral.
+                Keep it human-friendly and neutral.
                 """
                 try:
                     response = client.chat.completions.create(
@@ -178,11 +177,17 @@ if uploaded_file:
                     ai_explanation = response.choices[0].message.content
                 except Exception as e:
                     ai_explanation = f"(AI explanation unavailable — {e})"
+        elif use_ai_agent and not client:
+            ai_explanation = "⚠️ OpenAI API key not found. Please add your key in Streamlit Secrets."
         else:
             ai_explanation = "AI reasoning is disabled. Enable it from the sidebar for detailed medical explanation."
 
-        # Display AI output
-        color_gradient = "linear-gradient(135deg, #ff4d4d, #b30000);" if result_text == "blockage" else "linear-gradient(135deg, #06d6a0, #118ab2);"
+        # Display output
+        color_gradient = (
+            "linear-gradient(135deg, #ff4d4d, #b30000);"
+            if result_text == "blockage"
+            else "linear-gradient(135deg, #06d6a0, #118ab2);"
+        )
 
         st.markdown(f"""
             <div class='ai-box' style="background: {color_gradient}">
@@ -191,5 +196,5 @@ if uploaded_file:
             </div>
         """, unsafe_allow_html=True)
 
-# Footer
+# ========== FOOTER ==========
 st.markdown("<div class='footer'>© 2025 Heart Blockage Detection | Developed by <b>Satya Sahil</b> | Powered by TensorFlow, OpenAI & Streamlit</div>", unsafe_allow_html=True)
