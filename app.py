@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 # ========== SAFE HUGGING FACE CLIENT SETUP ==========
 hf_token = st.secrets.get("HF_API_KEY", None)
-HF_MODEL = "google/flan-t5-large"  # You can change to flan-t5-base for faster output
+HF_MODEL = "google/flan-t5-base"  # faster and stable than flan-t5-large
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -170,7 +170,6 @@ if uploaded_file:
         with colC:
             st.image(overlay, caption="Overlay Visualization", use_container_width=True)
 
-        # Save blockage overlay prediction
         result_image = Image.fromarray(overlay)
         result_image.save("predicted_blockage_image.png")
         st.download_button(
@@ -181,31 +180,47 @@ if uploaded_file:
         )
 
         # ========== AI REASONING (HUGGING FACE INTEGRATION) ==========
+        ai_explanation = ""
         if use_ai_agent:
             with st.spinner("🤖 Generating medical explanation via Hugging Face..."):
                 if hf_token:
+                    prompt = f"""
+                    You are a cardiology AI assistant analyzing a heart scan.
+                    Result: {result_text}.
+                    Confidence: {confidence:.1f}%.
+                    Blockage Ratio: {(blockage_ratio*100):.2f}%.
+                    Severity: {severity if result_text == 'blockage' else 'No Blockage'}.
+                    Provide a short, clear explanation and medical advice in 3 sentences.
+                    """
                     try:
-                        prompt = f"""
-                        You are a cardiology AI assistant analyzing a heart scan.
-                        Result: {result_text}.
-                        Confidence: {confidence:.1f}%.
-                        Blockage Ratio: {(blockage_ratio*100):.2f}%.
-                        Severity: {severity if result_text == 'blockage' else 'No Blockage'}.
-                        Provide a short, professional medical explanation and advice.
-                        """
                         response = requests.post(
                             f"https://api-inference.huggingface.co/models/{HF_MODEL}",
                             headers={"Authorization": f"Bearer {hf_token}"},
-                            json={"inputs": prompt}
+                            json={"inputs": prompt},
+                            timeout=40
                         )
-                        output = response.json()
-                        ai_explanation = output[0]["generated_text"] if isinstance(output, list) else str(output)
+
+                        if response.status_code == 200:
+                            try:
+                                data = response.json()
+                                if isinstance(data, list) and "generated_text" in data[0]:
+                                    ai_explanation = data[0]["generated_text"]
+                                elif isinstance(data, dict) and "error" in data:
+                                    ai_explanation = f"⚠️ Model Error: {data['error']}"
+                                else:
+                                    ai_explanation = "⚠️ No valid AI output received."
+                            except Exception as e:
+                                ai_explanation = f"⚠️ Invalid response format — {e}"
+                        else:
+                            ai_explanation = f"⚠️ Model request failed ({response.status_code})."
+                    except requests.exceptions.Timeout:
+                        ai_explanation = "⚠️ The model took too long to respond (timeout). Please try again."
                     except Exception as e:
-                        ai_explanation = f"(AI explanation unavailable — {e})"
+                        ai_explanation = f"⚠️ Unexpected error — {e}"
                 else:
-                    ai_explanation = "⚠️ Hugging Face API key not found. Add HF_API_KEY in Streamlit Secrets."
+                    ai_explanation = "⚠️ Hugging Face API key not found. Please add HF_API_KEY in Streamlit Secrets."
         else:
-            ai_explanation = "AI reasoning disabled."
+            ai_explanation = "🧠 AI reasoning disabled."
 
         color_gradient = (
             "linear-gradient(135deg, #ff4d4d, #b30000);" if result_text == "blockage"
