@@ -6,3 +6,4 @@ pillow
 requests
 streamlit-lottie
 openai
+matplotlib

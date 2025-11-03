@@ -7,6 +7,7 @@ from utils import preprocess_image
 import requests
 from streamlit_lottie import st_lottie
 from openai import OpenAI
+import matplotlib.pyplot as plt
 
 # ========== SAFE OPENAI CLIENT SETUP ==========
 api_key = st.secrets.get("OPENAI_API_KEY", None)
@@ -56,7 +57,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("<div class='main-title'>🫀 Heart Blockage Detection using VNet + AI Agent</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-title'>Upload a heart or angiogram image to detect potential blockages and get AI-driven detailed analysis</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-title'>Upload a heart or angiogram image to detect potential blockages and view AI-driven severity analysis</div>", unsafe_allow_html=True)
 
 # ========== LOAD MODEL ==========
 @st.cache_resource
@@ -94,7 +95,6 @@ if uploaded_file:
     col1, col2 = st.columns(2)
 
     with col1:
-        # Convert to RGB to prevent grayscale index errors
         image = Image.open(uploaded_file).convert("RGB")
         image = np.array(image)
         st.image(image, caption="🩻 Uploaded Image", use_container_width=True)
@@ -109,16 +109,17 @@ if uploaded_file:
             processed = preprocess_image(image)
             prediction = model.predict(processed)
 
-            # Post-process mask
             mask = (prediction[0, :, :, 0] > 0.5).astype(np.uint8)
             mask_resized = cv2.resize(mask * 255, (image.shape[1], image.shape[0]))
 
-            # Overlay mask safely
             overlay = image.copy()
             overlay[:, :, 1] = np.maximum(overlay[:, :, 1], mask_resized)
             overlay = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
 
         confidence = np.mean(prediction) * 100
+        blockage_area = np.sum(mask)
+        total_area = mask.size
+        blockage_ratio = blockage_area / total_area
 
         st.markdown("---")
         st.subheader("🧠 Prediction Result:")
@@ -133,6 +134,42 @@ if uploaded_file:
             st_lottie(success_anim, height=180, key="success_anim")
             result_text = "clear"
 
+        # ======== BLOCKAGE SEVERITY ESTIMATION ========
+        if result_text == "blockage":
+            if blockage_ratio < 0.05:
+                severity = "🟢 Mild Blockage"
+                severity_msg = "Small narrowing detected, minimal restriction of blood flow."
+            elif blockage_ratio < 0.15:
+                severity = "🟠 Moderate Blockage"
+                severity_msg = "Moderate narrowing in one or more vessel regions — requires medical review."
+            else:
+                severity = "🔴 Severe Blockage"
+                severity_msg = "Significant arterial blockage detected — immediate cardiology consultation advised."
+
+            st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #ffcccc, #ff9999);
+                    padding: 15px;
+                    border-radius: 12px;
+                    color: #000;
+                    font-size: 16px;
+                    margin-top: 10px;
+                    box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+                ">
+                <b>🩸 Blockage Severity:</b> {severity}<br><br>
+                {severity_msg}<br><br>
+                <b>Blockage Ratio:</b> {(blockage_ratio * 100):.2f}% of image area
+                </div>
+            """, unsafe_allow_html=True)
+
+            # Pie chart visualization
+            labels = ["Blocked", "Healthy"]
+            sizes = [blockage_ratio * 100, 100 - blockage_ratio * 100]
+            fig, ax = plt.subplots()
+            ax.pie(sizes, labels=labels, autopct="%1.1f%%", startangle=90, colors=["#ff6b6b", "#8ee000"])
+            ax.axis("equal")
+            st.pyplot(fig)
+
         # ========== VISUAL OUTPUTS ==========
         st.markdown("### 🩻 Visualization Results")
         colA, colB, colC = st.columns(3)
@@ -143,20 +180,15 @@ if uploaded_file:
         with colC:
             st.image(overlay, caption="Overlay Visualization", use_container_width=True)
 
-        st.markdown("---")
-        st.subheader("🤖 AI Assistant Analysis")
-
-        # Base message
-        if result_text == "blockage":
-            base_message = f"""
-                The scan indicates potential blockage with confidence {confidence:.1f}%.
-                Detected regions may represent restricted blood flow or vessel narrowing.
-                """
-        else:
-            base_message = f"""
-                The scan shows no visible blockage with confidence {confidence:.1f}%.
-                Vessel structures appear uniform and healthy.
-                """
+        # Save blockage overlay prediction
+        result_image = Image.fromarray(overlay)
+        result_image.save("predicted_blockage_image.png")
+        st.download_button(
+            label="📥 Download Predicted Image",
+            data=open("predicted_blockage_image.png", "rb").read(),
+            file_name="predicted_blockage_result.png",
+            mime="image/png"
+        )
 
         # ========== AI REASONING (OpenAI Integration) ==========
         if use_ai_agent and client:
@@ -165,9 +197,9 @@ if uploaded_file:
                 You are a cardiology AI assistant analyzing a heart scan model output.
                 The model result is: {result_text}.
                 Confidence: {confidence:.1f}%.
-                Provide a short, professional explanation describing what this means medically,
-                how reliable it might be, and what the next steps should be.
-                Keep it human-friendly and neutral.
+                Blockage Ratio: {(blockage_ratio * 100):.2f}%.
+                Severity: {severity if result_text == 'blockage' else 'No Blockage'}.
+                Provide a clear, medically accurate summary and advice.
                 """
                 try:
                     response = client.chat.completions.create(
@@ -182,7 +214,6 @@ if uploaded_file:
         else:
             ai_explanation = "AI reasoning is disabled. Enable it from the sidebar for detailed medical explanation."
 
-        # Display output
         color_gradient = (
             "linear-gradient(135deg, #ff4d4d, #b30000);"
             if result_text == "blockage"
@@ -191,8 +222,8 @@ if uploaded_file:
 
         st.markdown(f"""
             <div class='ai-box' style="background: {color_gradient}">
-                <b>AI Summary:</b><br>{base_message}<br><br>
-                <b>AI Detailed Analysis:</b> {ai_explanation}
+                <b>AI Summary:</b><br>
+                {ai_explanation}
             </div>
         """, unsafe_allow_html=True)
 
