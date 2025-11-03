@@ -6,14 +6,11 @@ import cv2
 from utils import preprocess_image
 import requests
 from streamlit_lottie import st_lottie
-from openai import OpenAI
 import matplotlib.pyplot as plt
 
-# ========== SAFE OPENAI CLIENT SETUP ==========
-api_key = st.secrets.get("OPENAI_API_KEY", None)
-client = None
-if api_key:
-    client = OpenAI(api_key=api_key)
+# ========== SAFE HUGGING FACE CLIENT SETUP ==========
+hf_token = st.secrets.get("HF_API_KEY", None)
+HF_MODEL = "google/flan-t5-large"  # You can change to flan-t5-base for faster output
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -84,7 +81,6 @@ st.sidebar.markdown("**Model:** VNet (50 Epochs)")
 st.sidebar.markdown("**Validation Accuracy:** ~99.2%")
 st.sidebar.markdown("**Developer:** Satya Sahil")
 st.sidebar.divider()
-
 use_ai_agent = st.sidebar.toggle("🤖 Enable AI Detailed Reasoning", value=True)
 st.sidebar.info("📁 Upload only medical scan images (JPG, PNG, JPEG).")
 
@@ -147,22 +143,16 @@ if uploaded_file:
                 severity_msg = "Significant arterial blockage detected — immediate cardiology consultation advised."
 
             st.markdown(f"""
-                <div style="
-                    background: linear-gradient(135deg, #ffcccc, #ff9999);
-                    padding: 15px;
-                    border-radius: 12px;
-                    color: #000;
-                    font-size: 16px;
-                    margin-top: 10px;
-                    box-shadow: 0 3px 10px rgba(0,0,0,0.15);
-                ">
+                <div style="background: linear-gradient(135deg, #ffcccc, #ff9999);
+                    padding: 15px; border-radius: 12px; color: #000;
+                    font-size: 16px; margin-top: 10px;
+                    box-shadow: 0 3px 10px rgba(0,0,0,0.15);">
                 <b>🩸 Blockage Severity:</b> {severity}<br><br>
                 {severity_msg}<br><br>
                 <b>Blockage Ratio:</b> {(blockage_ratio * 100):.2f}% of image area
                 </div>
             """, unsafe_allow_html=True)
 
-            # Pie chart visualization
             labels = ["Blocked", "Healthy"]
             sizes = [blockage_ratio * 100, 100 - blockage_ratio * 100]
             fig, ax = plt.subplots()
@@ -190,33 +180,35 @@ if uploaded_file:
             mime="image/png"
         )
 
-        # ========== AI REASONING (OpenAI Integration) ==========
-        if use_ai_agent and client:
-            with st.spinner("🧠 Generating detailed AI interpretation..."):
-                prompt = f"""
-                You are a cardiology AI assistant analyzing a heart scan model output.
-                The model result is: {result_text}.
-                Confidence: {confidence:.1f}%.
-                Blockage Ratio: {(blockage_ratio * 100):.2f}%.
-                Severity: {severity if result_text == 'blockage' else 'No Blockage'}.
-                Provide a clear, medically accurate summary and advice.
-                """
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    ai_explanation = response.choices[0].message.content
-                except Exception as e:
-                    ai_explanation = f"(AI explanation unavailable — {e})"
-        elif use_ai_agent and not client:
-            ai_explanation = "⚠️ OpenAI API key not found. Please add your key in Streamlit Secrets."
+        # ========== AI REASONING (HUGGING FACE INTEGRATION) ==========
+        if use_ai_agent:
+            with st.spinner("🤖 Generating medical explanation via Hugging Face..."):
+                if hf_token:
+                    try:
+                        prompt = f"""
+                        You are a cardiology AI assistant analyzing a heart scan.
+                        Result: {result_text}.
+                        Confidence: {confidence:.1f}%.
+                        Blockage Ratio: {(blockage_ratio*100):.2f}%.
+                        Severity: {severity if result_text == 'blockage' else 'No Blockage'}.
+                        Provide a short, professional medical explanation and advice.
+                        """
+                        response = requests.post(
+                            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+                            headers={"Authorization": f"Bearer {hf_token}"},
+                            json={"inputs": prompt}
+                        )
+                        output = response.json()
+                        ai_explanation = output[0]["generated_text"] if isinstance(output, list) else str(output)
+                    except Exception as e:
+                        ai_explanation = f"(AI explanation unavailable — {e})"
+                else:
+                    ai_explanation = "⚠️ Hugging Face API key not found. Add HF_API_KEY in Streamlit Secrets."
         else:
-            ai_explanation = "AI reasoning is disabled. Enable it from the sidebar for detailed medical explanation."
+            ai_explanation = "AI reasoning disabled."
 
         color_gradient = (
-            "linear-gradient(135deg, #ff4d4d, #b30000);"
-            if result_text == "blockage"
+            "linear-gradient(135deg, #ff4d4d, #b30000);" if result_text == "blockage"
             else "linear-gradient(135deg, #06d6a0, #118ab2);"
         )
 
@@ -228,4 +220,4 @@ if uploaded_file:
         """, unsafe_allow_html=True)
 
 # ========== FOOTER ==========
-st.markdown("<div class='footer'>© 2025 Heart Blockage Detection | Developed by <b>Satya Sahil</b> | Powered by TensorFlow, OpenAI & Streamlit</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>© 2025 Heart Blockage Detection | Developed by <b>Satya Sahil</b> | Powered by TensorFlow, Hugging Face & Streamlit</div>", unsafe_allow_html=True)
