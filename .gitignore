@@ -1,5 +1,66 @@
+# ===============================
+# 🧠 Heart Blockage Detection App
+# Streamlit + TensorFlow + Hugging Face Project
+# ===============================
+
+# 🔹 Virtual environment
 venv/
+.env/
+ENV/
+env/
+
+# 🔹 Python cache and compiled files
 __pycache__/
-.streamlit/secrets.toml
 *.pyc
+*.pyo
+*.pyd
+
+# 🔹 OS / IDE generated files
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+
+# 🔹 Streamlit configuration & secrets
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# 🔹 Model weights / large files
+*.h5
+*.hdf5
+*.ckpt
+*.pb
+*.tflite
+
+# 🔹 Dataset / media files
+*.csv
+*.xlsx
+*.zip
+*.tar
+*.gz
+*.npz
+*.npy
+*.jpg
+*.jpeg
+*.png
+
+# 🔹 Temporary & output files
+*.tmp
+*.bak
+*.swp
+predicted_blockage_image.png
+predicted_blockage_result.png
+
+# 🔹 Local test outputs
+/test_outputs/
+*.pdf
+*.mp4
+*.gif
+
+# 🔹 Jupyter & Colab temp files
+.ipynb_checkpoints/
+*.ipynb
+
+# 🔹 System or deployment files
+__MACOSX/
