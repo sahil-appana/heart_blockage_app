@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 # ========== SAFE HUGGING FACE CLIENT SETUP ==========
 hf_token = st.secrets.get("HF_API_KEY", None)
-HF_MODEL = "google/flan-t5-base"  # faster and stable than flan-t5-large
+HF_MODEL = "distilbert-base-uncased"  # faster and stable than flan-t5-large
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
