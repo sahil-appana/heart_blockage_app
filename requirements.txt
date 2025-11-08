@@ -7,3 +7,4 @@ requests
 streamlit-lottie
 openai
 matplotlib
+google-generativeai
