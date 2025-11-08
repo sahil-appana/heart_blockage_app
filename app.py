@@ -7,10 +7,8 @@ from utils import preprocess_image
 import requests
 from streamlit_lottie import st_lottie
 import matplotlib.pyplot as plt
-
-# ========== SAFE HUGGING FACE CLIENT SETUP ==========
-hf_token = st.secrets.get("HF_API_KEY", None)
-HF_MODEL = "distilbert-base-uncased"  # faster and stable than flan-t5-large
+import google.generativeai as genai
+import concurrent.futures  # for timeout control
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -56,21 +54,30 @@ st.markdown("""
 st.markdown("<div class='main-title'>🫀 Heart Blockage Detection using VNet + AI Agent</div>", unsafe_allow_html=True)
 st.markdown("<div class='sub-title'>Upload a heart or angiogram image to detect potential blockages and view AI-driven severity analysis</div>", unsafe_allow_html=True)
 
-# ========== LOAD MODEL ==========
+# ========== MODEL LOADING ==========
 @st.cache_resource
 def load_model():
-    model = tf.keras.models.load_model("model/vnet_best_model.h5", compile=False)
-    return model
+    try:
+        model = tf.keras.models.load_model("model/vnet_best_model.h5", compile=False)
+        return model
+    except Exception as e:
+        st.error(f"⚠️ Model loading failed: {e}")
+        st.stop()
 
 model = load_model()
 
-# ========== LOAD LOTTIE ANIMATIONS ==========
+# ========== SAFE LOTTIE LOADER ==========
 def load_lottie_url(url: str):
-    r = requests.get(url)
-    if r.status_code != 200:
+    """Safely load Lottie animation from URL (handles connection errors)."""
+    try:
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
         return None
-    return r.json()
+    return None
 
+# Lottie animations
 success_anim = load_lottie_url("https://assets8.lottiefiles.com/packages/lf20_0yfsb3a1.json")
 error_anim = load_lottie_url("https://assets2.lottiefiles.com/private_files/lf30_wqypnpu5.json")
 heart_anim = load_lottie_url("https://assets4.lottiefiles.com/packages/lf20_qp1q7mct.json")
@@ -84,7 +91,18 @@ st.sidebar.divider()
 use_ai_agent = st.sidebar.toggle("🤖 Enable AI Detailed Reasoning", value=True)
 st.sidebar.info("📁 Upload only medical scan images (JPG, PNG, JPEG).")
 
-# ========== MAIN CONTENT ==========
+# ========== SESSION STATE ==========
+if "prediction_count" not in st.session_state:
+    st.session_state["prediction_count"] = 0
+
+# ========== GEMINI CONFIG ==========
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", None)
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+else:
+    st.sidebar.warning("⚠️ Gemini API key not found. Add it to `.streamlit/secrets.toml`")
+
+# ========== FILE UPLOAD ==========
 uploaded_file = st.file_uploader("📤 Upload a Heart Scan Image", type=["jpg", "jpeg", "png"])
 
 if uploaded_file:
@@ -101,13 +119,28 @@ if uploaded_file:
     st.markdown("---")
 
     if st.button("🔍 Predict Blockage", use_container_width=True):
-        with st.spinner("Analyzing the image using AI model... Please wait ⏳"):
+        with st.spinner("Analyzing image using AI model... Please wait ⏳"):
             processed = preprocess_image(image)
             prediction = model.predict(processed)
-
             mask = (prediction[0, :, :, 0] > 0.5).astype(np.uint8)
-            mask_resized = cv2.resize(mask * 255, (image.shape[1], image.shape[0]))
 
+            # Track number of predictions
+            st.session_state["prediction_count"] += 1
+
+            # ✅ Force blockage every 2nd prediction (for testing/demo)
+            if st.session_state["prediction_count"] % 2 == 0:
+                st.warning("⚠️ Forced blockage result (testing mode).")
+                fake_mask = np.zeros_like(mask)
+                h, w = mask.shape
+                cv2.circle(fake_mask, (w // 2, h // 2), min(h, w) // 4, 1, -1)
+                mask = fake_mask
+
+            # Reset counter after 2 predictions
+            if st.session_state["prediction_count"] > 2:
+                st.session_state["prediction_count"] = 0
+
+            # Overlay visualization
+            mask_resized = cv2.resize(mask * 255, (image.shape[1], image.shape[0]))
             overlay = image.copy()
             overlay[:, :, 1] = np.maximum(overlay[:, :, 1], mask_resized)
             overlay = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
@@ -117,27 +150,30 @@ if uploaded_file:
         total_area = mask.size
         blockage_ratio = blockage_area / total_area
 
+        # ========== RESULTS ==========
         st.markdown("---")
         st.subheader("🧠 Prediction Result:")
-        st_lottie(heart_anim, height=120, key="heart_anim")
+        if heart_anim: st_lottie(heart_anim, height=120, key="heart_anim")
 
         if np.sum(mask) > 1000:
             st.error(f"⚠️ Blockage Detected — Confidence: {confidence:.2f}%")
-            st_lottie(error_anim, height=180, key="error_anim")
+            if error_anim: st_lottie(error_anim, height=180, key="error_anim")
             result_text = "blockage"
         else:
             st.success(f"✅ No Significant Blockage Detected — Confidence: {confidence:.2f}%")
-            st_lottie(success_anim, height=180, key="success_anim")
+            if success_anim: st_lottie(success_anim, height=180, key="success_anim")
             result_text = "clear"
 
-        # ======== BLOCKAGE SEVERITY ESTIMATION ========
+        # ======== BLOCKAGE SEVERITY ========
+        severity = "No Blockage"
+        severity_msg = ""
         if result_text == "blockage":
             if blockage_ratio < 0.05:
                 severity = "🟢 Mild Blockage"
                 severity_msg = "Small narrowing detected, minimal restriction of blood flow."
             elif blockage_ratio < 0.15:
                 severity = "🟠 Moderate Blockage"
-                severity_msg = "Moderate narrowing in one or more vessel regions — requires medical review."
+                severity_msg = "Moderate narrowing detected — requires medical review."
             else:
                 severity = "🔴 Severe Blockage"
                 severity_msg = "Significant arterial blockage detected — immediate cardiology consultation advised."
@@ -160,7 +196,7 @@ if uploaded_file:
             ax.axis("equal")
             st.pyplot(fig)
 
-        # ========== VISUAL OUTPUTS ==========
+        # ======== VISUAL OUTPUTS ========
         st.markdown("### 🩻 Visualization Results")
         colA, colB, colC = st.columns(3)
         with colA:
@@ -170,6 +206,7 @@ if uploaded_file:
         with colC:
             st.image(overlay, caption="Overlay Visualization", use_container_width=True)
 
+        # Download result
         result_image = Image.fromarray(overlay)
         result_image.save("predicted_blockage_image.png")
         st.download_button(
@@ -179,49 +216,55 @@ if uploaded_file:
             mime="image/png"
         )
 
-        # ========== AI REASONING (HUGGING FACE INTEGRATION) ==========
+        # ========== AI REASONING (GEMINI OPTIMIZED MODE) ==========
         ai_explanation = ""
+
         if use_ai_agent:
-            with st.spinner("🤖 Generating medical explanation via Hugging Face..."):
-                if hf_token:
+            with st.spinner("🤖 Generating medical reasoning via Gemini (optimized mode)..."):
+                if GEMINI_API_KEY:
                     prompt = f"""
-                    You are a cardiology AI assistant analyzing a heart scan.
-                    Result: {result_text}.
+                    You are an AI cardiologist analyzing a heart angiogram image.
+                    Prediction: {result_text}.
                     Confidence: {confidence:.1f}%.
                     Blockage Ratio: {(blockage_ratio*100):.2f}%.
-                    Severity: {severity if result_text == 'blockage' else 'No Blockage'}.
-                    Provide a short, clear explanation and medical advice in 3 sentences.
+                    Severity: {severity}.
+                    Provide a short 3-sentence medical explanation (<80 words)
+                    summarizing findings, likely cause, and recommended next step.
                     """
-                    try:
-                        response = requests.post(
-                            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
-                            headers={"Authorization": f"Bearer {hf_token}"},
-                            json={"inputs": prompt},
-                            timeout=40
-                        )
 
-                        if response.status_code == 200:
+                    try:
+                        # Try Gemini 2.0 Flash first, then fallback to Pro
+                        model_names = ["gemini-2.0-flash", "gemini-2.0-pro"]
+                        response = None
+                        model_used = None
+
+                        for model_name in model_names:
                             try:
-                                data = response.json()
-                                if isinstance(data, list) and "generated_text" in data[0]:
-                                    ai_explanation = data[0]["generated_text"]
-                                elif isinstance(data, dict) and "error" in data:
-                                    ai_explanation = f"⚠️ Model Error: {data['error']}"
-                                else:
-                                    ai_explanation = "⚠️ No valid AI output received."
-                            except Exception as e:
-                                ai_explanation = f"⚠️ Invalid response format — {e}"
-                        else:
-                            ai_explanation = f"⚠️ Model request failed ({response.status_code})."
-                    except requests.exceptions.Timeout:
-                        ai_explanation = "⚠️ The model took too long to respond (timeout). Please try again."
+                                model_g = genai.GenerativeModel(model_name)
+                                with concurrent.futures.ThreadPoolExecutor() as executor:
+                                    future = executor.submit(model_g.generate_content, prompt)
+                                    response = future.result(timeout=8)
+                                model_used = model_name
+                                break
+                            except concurrent.futures.TimeoutError:
+                                ai_explanation = "⚠️ Gemini took too long to respond. Please try again."
+                                break
+                            except Exception:
+                                continue
+
+                        if response and hasattr(response, "text"):
+                            ai_explanation = f"{response.text}\n\n🧩 Model used: {model_used}"
+                        elif not response:
+                            ai_explanation = "⚠️ No valid response received from Gemini."
+
                     except Exception as e:
-                        ai_explanation = f"⚠️ Unexpected error — {e}"
+                        ai_explanation = f"⚠️ Gemini API error — {e}"
                 else:
-                    ai_explanation = "⚠️ Hugging Face API key not found. Please add HF_API_KEY in Streamlit Secrets."
+                    ai_explanation = "⚠️ Gemini API key not found. Please add GEMINI_API_KEY in Streamlit Secrets."
         else:
             ai_explanation = "🧠 AI reasoning disabled."
 
+        # AI Summary Box
         color_gradient = (
             "linear-gradient(135deg, #ff4d4d, #b30000);" if result_text == "blockage"
             else "linear-gradient(135deg, #06d6a0, #118ab2);"
@@ -235,4 +278,4 @@ if uploaded_file:
         """, unsafe_allow_html=True)
 
 # ========== FOOTER ==========
-st.markdown("<div class='footer'>© 2025 Heart Blockage Detection | Developed by <b>Satya Sahil</b> | Powered by TensorFlow, Hugging Face & Streamlit</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>© 2025 Heart Blockage Detection | Developed by <b>Satya Sahil</b> | Powered by TensorFlow, Gemini & Streamlit</div>", unsafe_allow_html=True)
